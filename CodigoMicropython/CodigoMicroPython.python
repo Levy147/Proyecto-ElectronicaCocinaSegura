@@ -1,0 +1,156 @@
+from machine import Pin, ADC, PWM
+import time
+
+# Definición de pines
+PIN_GAS_HUMO = 23
+PIN_LED_ROJO = 22
+PIN_LED_NARANJA = 21
+PIN_TEMPERATURA = 19  # ADC1_CH3 en ESP32
+PIN_MOVIMIENTO = 18
+PIN_BUZZER = 5
+
+# Configurar pines
+gas_humo_sensor = Pin(PIN_GAS_HUMO, Pin.IN)
+led_rojo = Pin(PIN_LED_ROJO, Pin.OUT)
+led_naranja = Pin(PIN_LED_NARANJA, Pin.OUT)
+movimiento_sensor = Pin(PIN_MOVIMIENTO, Pin.IN)
+buzzer = PWM(Pin(PIN_BUZZER))
+
+# Sensor de temperatura (ADC)
+temperatura_sensor = ADC(Pin(PIN_TEMPERATURA))
+temperatura_sensor.atten(ADC.ATTN_11DB)  # Rango 0-3.3V
+
+# Constantes
+TEMPERATURA_UMBRAL = 30  # 30°C
+TIEMPO_ALERTA = 5000     # 5 segundos en ms
+
+# Variables de estado
+ventilador_encendido = False
+
+def leer_sensores():
+    """Lee todos los sensores y retorna los valores"""
+    gas_humo_detectado = gas_humo_sensor.value()
+    
+    # Leer temperatura (conversión aproximada - ajustar según sensor)
+    lectura_analogica = temperatura_sensor.read()
+    temperatura = (lectura_analogica / 4095) * 100  # Conversión básica
+    
+    movimiento_detectado = movimiento_sensor.value()
+    
+    # Debugging
+    print(f"Gas/Humo: {gas_humo_detectado} | Temp: {temperatura:.1f}°C | Movimiento: {movimiento_detectado}")
+    
+    return gas_humo_detectado, temperatura, movimiento_detectado
+
+def controlar_buzzer(frecuencia=0):
+    """Controla el buzzer (0 para apagar)"""
+    if frecuencia == 0:
+        buzzer.duty(0)  # Apagar
+    else:
+        buzzer.freq(frecuencia)
+        buzzer.duty(512)  # 50% duty cycle
+
+def procesar_gas_humo(gas_humo_detectado):
+    """Procesa la detección de gas/humo"""
+    if gas_humo_detectado:
+        # Si hay gas/humo detectado
+        led_rojo.on()
+        controlar_buzzer(1000)  # Sonido continuo
+        
+        # El ventilador NO se enciende si hay gas
+        global ventilador_encendido
+        ventilador_encendido = False
+        
+        print("ALERTA: Gas/Humo detectado!")
+        return True
+    else:
+        # Si no hay gas/humo
+        led_rojo.off()
+        controlar_buzzer(0)
+        return False
+
+def activar_alerta_nino():
+    """Activa la alerta de niño detectado por 5 segundos"""
+    tiempo_inicio = time.ticks_ms()
+    
+    while time.ticks_diff(time.ticks_ms(), tiempo_inicio) < TIEMPO_ALERTA:
+        # LED naranja intermitente
+        led_naranja.on()
+        controlar_buzzer(2000)  # Sonido de alerta
+        time.sleep_ms(500)
+        
+        led_naranja.off()
+        controlar_buzzer(0)
+        time.sleep_ms(500)
+        
+        # Verificar si todavía se cumple la condición
+        gas_humo, temp, mov = leer_sensores()
+        if not (temp > TEMPERATURA_UMBRAL and mov):
+            break  # Salir si la condición ya no se cumple
+    
+    # Asegurarse de apagar todo al final
+    led_naranja.off()
+    controlar_buzzer(0)
+
+def procesar_temperatura_movimiento(temperatura, movimiento_detectado):
+    """Procesa temperatura y movimiento"""
+    if temperatura > TEMPERATURA_UMBRAL and movimiento_detectado:
+        print("ALERTA: Temperatura alta y niño detectado!")
+        activar_alerta_nino()
+    else:
+        # Apagar LED naranja si no hay alerta
+        led_naranja.off()
+
+def controlar_ventilador(encender):
+    """Controla el ventilador (solo si no hay gas)"""
+    global ventilador_encendido
+    gas_humo_detectado = gas_humo_sensor.value()
+    
+    if encender and not gas_humo_detectado:
+        # Solo encender ventilador si no hay gas
+        ventilador_encendido = True
+        print("Ventilador ENCENDIDO")
+        # Aquí agregarías el código para encender el ventilador físico
+    else:
+        ventilador_encendido = False
+        print("Ventilador APAGADO")
+        # Aquí agregarías el código para apagar el ventilador físico
+
+def main():
+    """Función principal"""
+    print("Sistema de Cocina Segura Iniciado - MicroPython")
+    
+    # Inicializar estados
+    led_rojo.off()
+    led_naranja.off()
+    controlar_buzzer(0)
+    
+    try:
+        while True:
+            # Leer sensores
+            gas_humo, temperatura, movimiento = leer_sensores()
+            
+            # Procesar lógica de gas/humo
+            procesar_gas_humo(gas_humo)
+            
+            # Procesar lógica de temperatura y movimiento
+            procesar_temperatura_movimiento(temperatura, movimiento)
+            
+            # Controlar ventilador basado en humo (sin gas)
+            if gas_humo == 0:  # Si no hay gas, podría haber humo
+                controlar_ventilador(True)
+            else:
+                controlar_ventilador(False)
+            
+            time.sleep_ms(100)  # Pequeña pausa
+            
+    except KeyboardInterrupt:
+        print("Sistema detenido")
+        # Limpiar antes de salir
+        led_rojo.off()
+        led_naranja.off()
+        controlar_buzzer(0)
+
+# Ejecutar el programa
+if __name__ == "__main__":
+    main()
